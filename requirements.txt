@@ -14,8 +14,10 @@ h11==0.14.0
 idna==3.10
 psycopg2-binary==2.9.10
 pydantic==2.10.3
+pydantic-settings==2.6.1
 pydantic_core==2.27.1
 PySocks==1.7.1
+python-dotenv==1.0.1
 requests==2.32.3
 requests-file==2.1.0
 setuptools==75.6.0
