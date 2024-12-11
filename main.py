@@ -6,7 +6,15 @@ import models
 
 from database import engine, SessionLocal, Base
 from sqlalchemy.orm import Session
-from seeder import seed_data
+from utils.seeder import seed_data
+
+from schemas import (
+    TagBase,
+    AddChildRequest,
+    UpdateTagRequest,
+    TagRequest,
+    SaveTreeRequest,
+)
 
 
 app = FastAPI()
@@ -22,36 +30,6 @@ app.add_middleware(
 )
 
 models.Base.metadata.create_all(bind=engine)
-
-
-class TagBase(BaseModel):
-    name: str
-    data: str
-
-
-class AddChildRequest(BaseModel):
-    parent_id: int
-
-
-class UpdateTagRequest(BaseModel):
-    name: str
-    data: str
-
-
-class TagRequest(BaseModel):
-    name: str
-    data: Optional[str] = None
-    children: Optional[List["TagRequest"]] = []
-    id: Optional[int] = None
-
-
-TagRequest.update_forward_refs()  # Enable recursive definition
-
-
-class SaveTreeRequest(BaseModel):
-    tree: List[dict]
-    name: str
-    id: Optional[int] = None
 
 
 def get_db():
