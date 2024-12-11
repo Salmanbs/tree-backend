@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Annotated
+from typing import List, Annotated, Optional
 import models
 
 from database import engine, SessionLocal, Base
@@ -36,6 +36,20 @@ class AddChildRequest(BaseModel):
 class UpdateTagRequest(BaseModel):
     name: str
     data: str
+
+
+class TagRequest(BaseModel):
+    name: str
+    data: Optional[str] = None
+    children: Optional[List["TagRequest"]] = []
+
+
+TagRequest.update_forward_refs()  # Enable recursive definition
+
+
+class SaveTreeRequest(BaseModel):
+    tree: List[dict]
+    name: str
 
 
 def get_db():
@@ -84,7 +98,7 @@ async def get_trees(db: db_dependency):
             {
                 "id": tree.id,
                 "name": tree.name,
-                "children": [build_tag_tree(tag, db) for tag in root_tags],
+                "tree": [build_tag_tree(tag, db) for tag in root_tags],
             }
         )
     return result
@@ -135,6 +149,61 @@ async def update_tag(tag_id: int, request: UpdateTagRequest, db: db_dependency):
     db.refresh(tag)
 
     return {"id": tag.id, "name": tag.name, "data": tag.data}
+
+
+@app.post("/trees/save")
+async def save_tree(request: SaveTreeRequest, db: db_dependency):
+    def save_tags(tree, parent_id=None, tree_id=None):
+        for tag in tree:
+            # Create a new Tag object
+            tag_obj = models.Tag(
+                name=tag["name"],
+                data=tag.get("data"),  # Handle optional data field
+                parent_id=parent_id,
+                tree_id=tree_id,
+            )
+            db.add(tag_obj)
+            db.commit()
+            db.refresh(tag_obj)
+
+            # Recursively save children
+            if "children" in tag and tag["children"]:
+                save_tags(tag["children"], parent_id=tag_obj.id, tree_id=tree_id)
+
+    try:
+        # Delete existing tags and trees (if needed)
+        db.query(models.Tag).delete()
+        db.query(models.Tree).delete()
+        db.commit()
+
+        # Create a new Tree object
+        tree_obj = models.Tree(name=request.name)
+        db.add(tree_obj)
+        db.commit()
+        db.refresh(tree_obj)
+
+        # Save new tree hierarchy
+        for tree in request.tree:
+            # Save associated tags recursively
+
+            tag_obj = models.Tag(
+                name=tree["name"],
+                data=tree.get("data"),  # Handle optional data field
+                parent_id=None,
+                tree_id=tree_obj.id,
+            )
+            db.add(tag_obj)
+            db.commit()
+            db.refresh(tag_obj)
+
+            if "children" in tree:
+                save_tags(tree["children"], parent_id=tag_obj.id, tree_id=tree_obj.id)
+
+        return {"status": "success", "message": "Tree hierarchy saved successfully"}
+    except Exception as e:
+        # Rollback the transaction in case of error
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
 @app.get("/tags")
