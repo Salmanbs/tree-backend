@@ -18,6 +18,7 @@ class Tag(Base):
     data = Column(String, nullable=True)  # Nullable if the tag has children
     parent_id = Column(Integer, ForeignKey("tags.id"), nullable=True)
     tree_id = Column(Integer, ForeignKey("trees.id"), nullable=False)
+    order = Column(Integer, nullable=True)
 
     # Relationships
     parent = relationship("Tag", remote_side=[id], backref="children")

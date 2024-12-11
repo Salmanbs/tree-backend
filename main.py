@@ -42,6 +42,7 @@ class TagRequest(BaseModel):
     name: str
     data: Optional[str] = None
     children: Optional[List["TagRequest"]] = []
+    id: Optional[int] = None
 
 
 TagRequest.update_forward_refs()  # Enable recursive definition
@@ -50,6 +51,7 @@ TagRequest.update_forward_refs()  # Enable recursive definition
 class SaveTreeRequest(BaseModel):
     tree: List[dict]
     name: str
+    id: Optional[int] = None
 
 
 def get_db():
@@ -75,7 +77,12 @@ db_dependency = Annotated[Session, Depends(get_db)]
 
 # Recursive function to build the tag tree
 def build_tag_tree(tag: models.Tag, db: Session):
-    children = db.query(models.Tag).filter(models.Tag.parent_id == tag.id).all()
+    children = (
+        db.query(models.Tag)
+        .filter(models.Tag.parent_id == tag.id)
+        .order_by(models.Tag.order)
+        .all()
+    )
     return {
         "id": tag.id,
         "name": tag.name,
@@ -116,24 +123,28 @@ async def add_child(request: AddChildRequest, db: db_dependency):
     if parent_tag.data:
         parent_tag.data = None
 
+    # Determine the order for the new child
+    max_order = (
+        db.query(models.Tag)
+        .filter(models.Tag.parent_id == parent_tag.id)
+        .order_by(models.Tag.order.desc())
+        .first()
+    )
+    new_order = (max_order.order + 1) if max_order else 0
+
     # Create a new child tag
     new_child = models.Tag(
         name="New Child",
         data="Data",
         parent_id=parent_tag.id,
         tree_id=parent_tag.tree_id,  # Associate with the same tree
+        order=new_order,
     )
     db.add(new_child)
     db.commit()
     db.refresh(new_child)
 
-    # Return the updated tag tree structure
-    updated_tree = (
-        db.query(models.Tag)
-        .filter(models.Tag.tree_id == parent_tag.tree_id, models.Tag.parent_id == None)
-        .all()
-    )
-    return {"tree": [build_tag_tree(tag, db) for tag in updated_tree]}
+    return new_child
 
 
 @app.put("/tags/{tag_id}")
@@ -155,66 +166,86 @@ async def update_tag(tag_id: int, request: UpdateTagRequest, db: db_dependency):
 async def save_tree(request: SaveTreeRequest, db: db_dependency):
     def save_tags(tree, parent_id=None, tree_id=None):
         for tag in tree:
-            # Create a new Tag object
-            tag_obj = models.Tag(
-                name=tag["name"],
-                data=tag.get("data"),  # Handle optional data field
-                parent_id=parent_id,
-                tree_id=tree_id,
-            )
-            db.add(tag_obj)
-            db.commit()
-            db.refresh(tag_obj)
+            # Check if the tag exists, create or update as needed
+            if "id" in tag:
+                tag_obj = (
+                    db.query(models.Tag).filter(models.Tag.id == tag["id"]).first()
+                )
+                if tag_obj:
+                    tag_obj.name = tag["name"]
+                    tag_obj.data = tag.get("data")
+                    tag_obj.parent_id = parent_id
+                    db.commit()
+                    db.refresh(tag_obj)
+                else:
+                    raise HTTPException(
+                        status_code=404, detail=f"Tag with id {tag['id']} not found."
+                    )
+            else:
+                # Create a new tag if no ID is provided
+                tag_obj = models.Tag(
+                    name=tag["name"],
+                    data=tag.get("data"),
+                    parent_id=parent_id,
+                    tree_id=tree_id,
+                )
+                db.add(tag_obj)
+                db.commit()
+                db.refresh(tag_obj)
 
             # Recursively save children
             if "children" in tag and tag["children"]:
                 save_tags(tag["children"], parent_id=tag_obj.id, tree_id=tree_id)
 
     try:
-        # Delete existing tags and trees (if needed)
-        db.query(models.Tag).delete()
-        db.query(models.Tree).delete()
-        db.commit()
-
-        # Create a new Tree object
-        tree_obj = models.Tree(name=request.name)
-        db.add(tree_obj)
-        db.commit()
-        db.refresh(tree_obj)
-
-        # Save new tree hierarchy
-        for tree in request.tree:
-            # Save associated tags recursively
-
-            tag_obj = models.Tag(
-                name=tree["name"],
-                data=tree.get("data"),  # Handle optional data field
-                parent_id=None,
-                tree_id=tree_obj.id,
+        if request.id:
+            # Modify an existing tree
+            tree_obj = (
+                db.query(models.Tree).filter(models.Tree.id == request.id).first()
             )
-            db.add(tag_obj)
+            if not tree_obj:
+                raise HTTPException(
+                    status_code=404, detail=f"Tree with id {request.id} not found."
+                )
+
+            # Update tree name
+            tree_obj.name = request.name
             db.commit()
-            db.refresh(tag_obj)
+            db.refresh(tree_obj)
 
-            if "children" in tree:
-                save_tags(tree["children"], parent_id=tag_obj.id, tree_id=tree_obj.id)
+            # Update tags
+            for tree in request.tree:
+                if "id" in tree:
+                    tag_obj = (
+                        db.query(models.Tag).filter(models.Tag.id == tree["id"]).first()
+                    )
+                    if tag_obj:
+                        tag_obj.name = tree["name"]
+                        tag_obj.data = tree.get("data")
+                        db.commit()
+                        db.refresh(tag_obj)
+                    else:
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Tag with id {tree['id']} not found.",
+                        )
+                else:
+                    # Save new root tags for existing tree
+                    save_tags([tree], parent_id=None, tree_id=tree_obj.id)
 
-        return {"status": "success", "message": "Tree hierarchy saved successfully"}
+        else:
+            # Create a new tree
+            tree_obj = models.Tree(name=request.name)
+            db.add(tree_obj)
+            db.commit()
+            db.refresh(tree_obj)
+
+            # Save new tree hierarchy
+            for tree in request.tree:
+                save_tags([tree], parent_id=None, tree_id=tree_obj.id)
+
+        return {"status": "success", "message": "Tree hierarchy processed successfully"}
     except Exception as e:
         # Rollback the transaction in case of error
         db.rollback()
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-
-
-@app.get("/tags")
-async def get_tags():
-    return "hi"
-
-
-@app.post("/tags")
-async def create_tag(tag: TagBase, db: db_dependency):
-    db_tag = models.Tag(name=tag.name, data=tag.data)
-    db.add(db_tag)
-    db.commit()
-    db.refresh(db_tag)
-    return db_tag
