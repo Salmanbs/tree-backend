@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from models import Tree, Tag
+from app.models import Tree, Tag
 
 
 def seed_data(db: Session):
