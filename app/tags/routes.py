@@ -1,12 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException
 from app.dependencies import db_dependency
 from app import models
 
 from app.schemas import (
     AddChildRequest,
     UpdateTagRequest,
-    SaveTreeRequest,
 )
 
 tags_router = APIRouter()

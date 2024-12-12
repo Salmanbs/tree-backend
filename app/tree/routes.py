@@ -1,11 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from sqlalchemy.orm import Session
 from app.dependencies import db_dependency
 from app import models
 
 from app.schemas import (
-    AddChildRequest,
-    UpdateTagRequest,
     SaveTreeRequest,
 )
 

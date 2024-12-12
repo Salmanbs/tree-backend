@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Annotated, Optional
+from typing import List, Optional
 
 
 class TagBase(BaseModel):
